@@ -1,0 +1,184 @@
+---
+title: "COVID_19"
+author: "Tim Cerelli"
+date: "2024-06-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Final Project 2 Covid 19 Data Analysis
+
+Here in this project we will be using the John Hopkins data on COVID19 cases and deaths. We will be analyzing, and plotting our data. 
+
+```{r urls, include=TRUE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(lubridate)
+
+# Base URL for the COVID-19 data repository
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+# List of filenames
+file_names <- c(
+  'time_series_covid19_confirmed_US.csv',
+  'time_series_covid19_confirmed_global.csv',
+  'time_series_covid19_deaths_US.csv',
+  'time_series_covid19_deaths_global.csv',
+  'time_series_covid19_recovered_global.csv'
+)
+
+# Construct URLs by combining base_url with each filename
+urls <- paste0(url_in, file_names)
+
+# Read CSV files directly from URLs
+us_cases <- read_csv(urls[1])
+global_cases <- read_csv(urls[2])
+us_deaths <- read_csv(urls[3])
+global_deaths <- read_csv(urls[4])
+global_recovered <- read_csv(urls[5])
+
+```
+
+## Tidy the Data 
+
+Next we will want to tidy the data making it better for our data analysis. We will be putting items such as date, cases, and deaths we will put in their own columns
+
+There is infomation we don't need such as lat and long we will remove. 
+
+```{r tidydata, include=TRUE, message=FALSE, warning=FALSE}
+
+#Global cases
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = 'date',
+               values_to = 'cases') %>%
+  select(-c(Lat, Long)) %>%
+  rename(province_state = 'Province/State', country_region = 'Country/Region')
+
+#Global deaths
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = 'date',
+               values_to = 'deaths') %>%
+  select(-c(Lat, Long)) %>%
+  rename(province_state = 'Province/State', country_region = 'Country/Region')
+
+#Combining global cases and global deaths
+global <- global_cases %>%
+  full_join(global_deaths) %>% 
+  mutate(date = mdy(date)) %>%
+  filter(cases > 0)
+
+#US cases
+us_cases <- us_cases %>%
+  pivot_longer(cols = -c(UID, 'iso2', 'iso3', code3, 'Admin2', FIPS, 'Province_State', 'Country_Region', Lat, Long_, 'Combined_Key'),
+               names_to = 'date',
+               values_to = 'cases') %>%
+  select(-c(UID, FIPS, code3, 'iso2', 'iso3', Lat, Long_, 'Combined_Key')) %>%
+  rename(county = Admin2, province_state = Province_State, country_region = Country_Region)
+
+#US deaths
+us_deaths <- us_deaths %>%
+  pivot_longer(cols = -c(UID, 'iso2', 'iso3', code3, FIPS, 'Admin2', 'Province_State', 'Country_Region', Lat, Long_, 'Combined_Key', Population),
+               names_to = 'date',
+               values_to = 'deaths') %>%
+  select(-c(UID, 'iso2', 'iso3', code3, FIPS, Lat, Long_, 'Combined_Key')) %>%
+  rename(county = Admin2, province_state = Province_State, country_region = Country_Region, population = Population)
+
+#Combining US cases and US deaths
+us <- us_cases %>%
+  full_join(us_deaths) %>%
+  mutate(date = mdy(date)) %>%
+  filter(cases > 0)
+
+#Making Us by state
+us_by_state <- us %>%
+  group_by(province_state, country_region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), 
+            population = sum(population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000 / population, cases_per_mil = cases * 1000000 / population) %>%
+  select(province_state, country_region, date, cases, cases_per_mil, deaths_per_mil, population, deaths) %>%
+  ungroup()
+
+#US totals
+us_totals <- us_by_state %>%
+  group_by(country_region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            population = sum(population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000 / population, 
+         cases_per_mil = cases * 1000000 / population,
+         new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths)) %>%
+  select(country_region, date, cases, deaths, new_cases, new_deaths, deaths_per_mil, cases_per_mil, population) %>%
+  ungroup()
+
+#Adding new cases and new deaths per million
+us_totals <- us_totals %>%
+  mutate(new_cases_per_mil = new_cases * 1000000 / population, 
+         new_deaths_per_mil = new_deaths * 1000000 / population) %>%
+  select(everything())
+
+
+```
+
+
+## Plotting our Data 
+
+Here we will visualize and analyze our data. 
+
+```{r plots, include=TRUE, message=FALSE, warning=FALSE }
+
+#US cases and deaths per million
+us_totals %>%
+  ggplot() +
+  geom_line(aes(x = date, y = deaths_per_mil, color = 'deaths')) + 
+  geom_line(aes(x = date, y = cases_per_mil, color = 'cases')) +
+  scale_y_log10() +
+  labs(title = 'Cases per Million and Deaths per Million in United States', 
+       x = 'Date', y = 'Deaths and Cases per Million')  +
+  scale_x_date(date_labels = '%m-%Y', date_breaks = '2 month') +
+  theme(axis.text.x = element_text(angle = 330))
+
+
+```
+
+```{r US_Cases_Mil, include=TRUE, message=FALSE, warning=FALSE}
+
+#US new cases and new deaths per million
+us_totals %>%
+  ggplot() +
+  geom_point(aes(x = date, y = new_cases_per_mil, color = 'Cases')) +
+  geom_point(aes(x = date, y = new_deaths_per_mil, color = 'Deaths')) +
+  scale_y_log10() + 
+  labs(title = 'United States New Cases and New Deaths per Million', x = 'Date', y = 'New Cases and Deaths per Mil Scaled by Log 10') +
+  scale_x_date(date_labels = '%m-%Y', date_breaks = '2 month') +
+  theme(axis.text.x = element_text(angle = 330))
+
+```
+
+
+
+```{r USAVACC, include=TRUE, message=FALSE, warning=FALSE }
+
+#us model of deaths and cases per mil to predict death per mil
+us_deaths_model <- lm(deaths_per_mil ~ cases_per_mil, data = us_totals)
+summary(us_deaths_model)
+
+us_totals <- us_totals %>%
+  mutate(pred_deaths_per_mil = predict(us_deaths_model))
+us_totals %>%
+  ggplot() +
+  geom_point(aes(x = cases_per_mil, y = deaths_per_mil, color = 'Actual Deaths per Million')) + 
+  geom_point(aes(x = cases_per_mil, y = pred_deaths_per_mil, color = 'Predicted Deaths per Million')) +
+  labs(title = 'American Deaths per Million as a Function of Cases per Million', x = 'Cases per Million', y = 'Deaths per Million')
+
+
+
+
+```
+
+
+
