@@ -1,0 +1,374 @@
+---
+title: "NYC Shooting Analysis"
+autor: Tim Cerelli
+date: "2024-06-17"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Introduction
+
+In this data analysis report we will analyze the historical shooting incidents in New York city. 
+We will be cleaning and analyzing the data to create a forecast model of future results. 
+
+My objective in this analysis is to see one the most dangerous neighborhoods based on shootings, and to analyze if these neighborhoods are getting safer. 
+Also I would like to analyze the similarities between perpetrator sex and the sex of the victim 
+
+#### Part 1 Overview of the Data
+The data set contains historical shooting incidents in New York City. The key variables include:
+
+OCCUR_DATE: The date of the shooting incident.
+
+BORO: The borough where the incident occurred.
+
+VIC_AGE_GROUP: The age group of the victim.
+
+VIC_SEX: The sex of the victim.
+
+VIC_RACE: The race of the victim.
+
+PERP_AGE_GROUP: The age group of the perpetrator.
+
+PERP_SEX: The sex of the perpetrator.
+
+
+Import Libraries and Data
+```{r packages, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load necessary packages
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+
+
+# URL for the dataset
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+# Read data from CSV file
+data <- read.csv(url_in)
+```
+
+##Part 2 Tidy Data
+
+```{r clean, include=TRUE, message=FALSE, warning=FALSE}
+# Clean and prepare the data
+tidy_data <- data %>%
+  select(-c(INCIDENT_KEY, JURISDICTION_CODE, LOC_CLASSFCTN_DESC, Latitude, Longitude, 
+            Lon_Lat, X_COORD_CD, Y_COORD_CD, PRECINCT, LOCATION_DESC, LOC_OF_OCCUR_DESC, 
+            STATISTICAL_MURDER_FLAG, OCCUR_TIME)) %>%
+  filter(!is.na(PERP_SEX) & PERP_SEX %in% c("M", "F")) %>%
+  mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"),
+         WEEK = lubridate::floor_date(OCCUR_DATE, "week"))
+
+# Load necessary libraries
+library(dplyr)
+
+# Assuming tidy_data is your dataframe containing the shooting incident data
+
+# Step 1: Identify values with fewer than 10 occurrences in VIC_AGE_GROUP
+vic_age_counts <- tidy_data %>%
+  count(VIC_AGE_GROUP) %>%
+  arrange(n)
+
+less_than_10_vic <- vic_age_counts %>%
+  filter(n < 10)
+
+# Step 2: Clean and transform VIC_AGE_GROUP to remove age groups that don't make sense
+tidy_data_clean <- tidy_data %>%
+  mutate(
+    VIC_AGE_GROUP_CLEAN = case_when(
+      VIC_AGE_GROUP %in% less_than_10_vic$VIC_AGE_GROUP ~ "Other",  # Group less frequent values
+      TRUE ~ as.character(VIC_AGE_GROUP)                           # Keep other values as they are
+    )
+  )
+
+# Step 3: Identify values with fewer than 10 occurrences in PERP_AGE_GROUP
+perp_age_counts <- tidy_data %>%
+  count(PERP_AGE_GROUP) %>%
+  arrange(n)
+
+less_than_10_perp <- perp_age_counts %>%
+  filter(n < 10)
+
+# Step 4: Clean and transform PERP_AGE_GROUP to remove age groups that don't make sense
+tidy_data_clean <- tidy_data_clean %>%
+  mutate(
+    PERP_AGE_GROUP_CLEAN = case_when(
+      PERP_AGE_GROUP %in% less_than_10_perp$PERP_AGE_GROUP ~ "Other",  # Group less frequent values
+      PERP_AGE_GROUP %in% c("1020", "1022", "1028","other") ~ "10-29",       # Correct specific values
+      PERP_AGE_GROUP == "224" ~ "18-24",                             # Correct another value
+      TRUE ~ as.character(PERP_AGE_GROUP)                            # Keep other values as they are
+    )
+  )
+
+```
+
+
+### Part 2 Tidy, transform, and summarize statistics 
+Let's start by looking at some summary statistics for the key variables.
+
+
+
+```{r summary, include=TRUE, message=FALSE, warning=FALSE}
+
+head(tidy_data)
+
+# Convert relevant columns to factors
+tidy_data$BORO <- as.factor(tidy_data$BORO)
+tidy_data$VIC_AGE_GROUP <- as.factor(tidy_data$VIC_AGE_GROUP)
+tidy_data$VIC_SEX <- as.factor(tidy_data$VIC_SEX)
+tidy_data$VIC_RACE <- as.factor(tidy_data$VIC_RACE)
+
+# Print the summary of tidy_data
+summary(tidy_data)
+
+```
+
+```{r plottingdata, include=TRUE, message=FALSE, warning=FALSE}
+# Aggregate data by year
+yearly_data <- tidy_data %>%
+  group_by(BORO, YEAR = lubridate::year(OCCUR_DATE)) %>%
+  summarise(total_shootings = n()) %>%
+  ungroup()
+
+
+# Aggregate data by  month
+monthly_data <- tidy_data %>%
+  group_by(BORO, MONTH = floor_date(OCCUR_DATE, "month")) %>%
+  summarise(total_shootings = n()) %>%
+  ungroup()
+
+
+# Aggregate data by borough and week
+  weekly_data <- tidy_data %>%
+    group_by(BORO, WEEK) %>%
+    summarise(total_shootings = n()) %>%
+    ungroup()
+  
+ # Pivot the table to wide format by perpetrator sex
+  cases_by_date_sex <- tidy_data %>%
+    filter(PERP_SEX %in% c("M", "F")) %>%
+    group_by(OCCUR_DATE, PERP_SEX) %>%
+    summarise(total_cases = n()) %>%
+    pivot_wider(names_from = PERP_SEX, values_from = total_cases, values_fill = 0) %>%
+    rename(M_PERP_SEX = M, F_PERP_SEX = F)
+  
+  
+
+# Plotting the data as a line graph by year
+plot1 <- ggplot(data = yearly_data, aes(x = YEAR, y = total_shootings, color = BORO)) +
+  geom_line() +
+  labs(title = "Yearly Number of Shootings by Borough",
+       x = "Year",
+       y = "Total Shootings",
+       color = "Borough") +
+  theme_minimal()
+
+# Assuming monthly_data is already created as per the previous instructions
+
+plotmonthly <- ggplot(data = monthly_data, aes(x = MONTH, y = total_shootings, color = BORO)) +
+  geom_line() +
+  labs(title = "Monthly Number of Shootings by Borough",
+       x = "Time",
+       y = "Total Shootings",
+       color = "Borough") +
+  theme_minimal()
+
+
+# Plotting the data
+  plot2 <- ggplot(data = weekly_data, aes(x = WEEK, y = total_shootings, color = BORO)) +
+    geom_line() +
+    labs(title = "Weekly Number of Shootings by Borough",
+         x = "Week",
+         y = "Total Shootings",
+         color = "Borough") +
+    theme_minimal()
+
+# Bar plot of perpetrator age groups
+plot_perp_age <- ggplot(tidy_data_clean, aes(x = PERP_AGE_GROUP_CLEAN)) +
+  geom_bar(fill = "#4682B4") +
+  labs(title = "Distribution of Perpetrator Age Groups",
+       x = "Perpetrator Age Group",
+       y = "Count") +
+  theme_minimal()
+
+# Bar plot of cleaned victim age groups
+plot_vic_age <- ggplot(tidy_data_clean, aes(x = VIC_AGE_GROUP_CLEAN)) +
+  geom_bar(fill = "#4682B4") +
+  labs(title = "Distribution of Victim Age Groups",
+       x = "Victim Age Group",
+       y = "Count") +
+  theme_minimal()
+  
+# Plotting the data
+plot3 <- ggplot(data = cases_by_date_sex, aes(x = OCCUR_DATE)) +
+  geom_line(aes(y = M_PERP_SEX, color = "Male Perpetrator")) +
+  geom_line(aes(y = F_PERP_SEX, color = "Female Perpetrator")) +
+  labs(title = "Number of Shootings by Perpetrator Sex Over Time",
+       x = "Date",
+       y = "Total Shootings",
+       color = "Perpetrator Sex") +
+  theme_minimal()
+
+
+# Prepare data for logistic regression
+logistic_data <- tidy_data %>%
+  select(PERP_SEX, PERP_AGE_GROUP, BORO, VIC_AGE_GROUP, VIC_SEX) %>%
+  mutate(PERP_SEX = ifelse(PERP_SEX == "M", 1, 0)) %>%
+  na.omit()
+
+# Fit logistic regression model
+modelsex <- glm(PERP_SEX ~ PERP_AGE_GROUP + BORO + VIC_AGE_GROUP + VIC_SEX, 
+             data = logistic_data, 
+             family = binomial)
+
+# Prepare data for regression
+regression_data <- tidy_data %>%
+  group_by(BORO, PERP_AGE_GROUP) %>%
+  summarise(total_shootings = n()) %>%
+  na.omit()
+
+# Fit multiple linear regression model
+modelshootings <- lm(total_shootings ~ BORO + PERP_AGE_GROUP, data = regression_data)
+
+```
+
+## Part 3 Plot Summary Analysis 
+
+From our plots we can determine that perpetrators are more likely to be younger and male. It is also noticeable that there are certain neighborhoods that have a higher likelihood of shootings to be present. From our graphs you will see both the Bronx and Brooklyn have the highest percentage of shootings.  
+
+
+```{r plots, echo=FALSE, message=FALSE, warning=FALSE}
+#print(plot1)
+#print(plot2)
+print(plot3)
+#print(plot_perp_age)
+#print(plot_vic_age)
+print(plotmonthly)
+#summary(modelsex)
+#summary(modelshootings)
+```
+
+## Part 3 Plot Summary Analysis 
+
+From the pie graph you will see both the Bronx and Brooklyn have the highest percentage of shootings.  
+
+```{r piechart, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Load necessary packages
+
+# Aggregate data by borough
+borough_data <- tidy_data %>%  group_by(BORO) %>%  summarise(total_shootings = n()) %>%  ungroup() %>%  mutate(percentage = total_shootings / sum(total_shootings) * 100)
+
+# Create a pie chart
+ggplot(borough_data, aes(x = "", y = percentage, fill = BORO)) +  geom_bar(stat = "identity", width = 1) +  coord_polar(theta = "y") +  labs(title = "Percentage of Shootings by Borough",       x = "",       y = "",       fill = "Borough") +  theme_minimal() +  theme(axis.text.x = element_blank(),        axis.ticks = element_blank(),        panel.grid = element_blank()) +  geom_text(aes(label = paste0(round(percentage, 1), "%")),             position = position_stack(vjust = 0.5))
+
+
+
+```
+
+```{r forecast, echo=FALSE, message=FALSE, warning=FALSE}
+# Install and load the forecast package
+library(forecast)
+
+# Aggregate data by year and borough
+yearly_data <- ungroup(summarise(group_by(tidy_data, BORO, YEAR = lubridate::year(OCCUR_DATE)), total_shootings = n()))
+
+# Get the list of unique boroughs
+boroughs <- unique(yearly_data$BORO)
+
+# Create an empty data frame to store forecasted values
+forecasted_data <- data.frame()
+
+# Loop through each borough and create a forecast
+for (borough in boroughs) {
+  # Filter data for the specific borough
+  borough_data <- arrange(filter(yearly_data, BORO == borough), YEAR)  
+  # Create a time series object
+  ts_data <- ts(borough_data$total_shootings, start = min(borough_data$YEAR), frequency = 1)  
+  # Fit an ARIMA model
+  fit <- auto.arima(ts_data)  
+  # Forecast the next 5 years
+  forecasted_values <- forecast(fit, h = 5)  
+  # Convert forecasted values to a data frame
+  forecasted_df <- data.frame(    YEAR = as.numeric(time(forecasted_values$mean)),    total_shootings = as.numeric(forecasted_values$mean),    BORO = borough  )  
+  # Combine with the original data
+  combined_data <- rbind(borough_data, forecasted_df)  
+  # Add to the forecasted data frame
+  forecasted_data <- rbind(forecasted_data, combined_data)}
+
+#print(forecasted_data)
+
+# Plot the forecasted values for all boroughs
+plot_forecast <- ggplot(forecasted_data, aes(x = YEAR, y = total_shootings, color = BORO)) +  geom_line() +  labs(title = "Forecasted Number of Shootings by Borough",       x = "Year",       y = "Total Shootings",       color = "Borough") + theme_minimal()
+```
+
+## Part 3 Data Model Analysis 
+
+In this graph we are presenting the probability of a certain age group perpetrator within a given borough. The null hypothesis is that a borough does not have an impact on the age group of a shooter and I would like to see if a borough can affect this. 
+
+
+I will be using a chi-squared test with a 0.05 significance level to test this. 
+
+
+
+```{r boroughs, echo=FALSE, message=FALSE, warning=FALSE}
+# Aggregate data to get proportions by borough and age group
+agg_data <- tidy_data_clean %>%
+  group_by(BORO, PERP_AGE_GROUP_CLEAN) %>%
+  summarise(count = n()) %>%
+  group_by(BORO) %>%
+  mutate(prob = count / sum(count)) %>%
+  ungroup()
+
+
+# Plotting
+plot_boroughs <- ggplot(agg_data, aes(x = PERP_AGE_GROUP_CLEAN, y = prob, fill = BORO)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Likelihood of Perpetrator Age Group by Borough",
+       x = "Perpetrator Age Group",
+       y = "Probability",
+       caption = "Data source: NYPD Shooting Incidents") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom") +
+  scale_fill_brewer(palette = "Set3")
+
+print(plot_boroughs)
+
+# Example chi-squared test result (replace with your actual result)
+chi_squared_test_result <- chisq.test(table(agg_data$BORO, agg_data$PERP_AGE_GROUP_CLEAN))
+
+# Significance level
+alpha <- 0.05
+
+# Extract p-value from the test result
+p_value <- chi_squared_test_result$p.value
+
+print(p_value)
+
+# Interpretation based on p-value and alpha
+if (p_value < alpha) {
+  cat("Reject the null hypothesis: There is a significant association between borough and age group.\n")
+} else {
+  cat("Fail to reject the null hypothesis: There is no significant association between borough and age group.\n")
+}
+
+
+# Print the chi-squared statistic and degrees of freedom
+cat("\nChi-squared:", chi_squared_test_result$statistic, "\n")
+cat("Degrees of freedom:", chi_squared_test_result$parameter, "\n")
+```
+
+## Part 4 Bias Identification
+
+To conclude my project I found that there was no evidence to show a relation between perpetrator age being centrally located in a specific neighborhood. I thought the neighborhood might have an impact on the way age groups act. This was not to be the case as it was seen that it was just more likely a younger age group were to be the perpetrator no matter the neighborhood. I took out my bias by using statistics and sticking to the numbers to show what truly happened. 
